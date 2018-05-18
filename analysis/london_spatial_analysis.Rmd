@@ -1,30 +1,116 @@
 ---
-title: "London spatial analysis"
-author: "Florian Zenoni"
-date: "May 18, 2018"
-output: html_document
+title: London accidents and spatial analysis 
+author: Florian Zenoni
+date: '2018-05-18'
+categories:
+  - R
+  - Kaggle
+  - Spatial analysis
+tags:
+  - sf
+slug: analyzing-london-accidents
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r, echo=FALSE}
+# CONFIG
+user_name <- "fzenoni" # your Git username (only needed if
+# you want to deploy to GH pages)
+project_name <- "london-accidents" # adapt!
+package_date <- "2018-05-18" # date of the CRAN snapshot that
+# the checkpoint package uses
 ```
 
-## R Markdown
+### GitHub
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+The code for the herein described process can also be freely downloaded from [https://github.com/`r user_name`/`r project_name`](https://github.com/`r user_name`/`r project_name`). 
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+```{r include=FALSE}
+detach_all_packages <- function() {
+  basic_packages_blank <-  c("stats",
+    "graphics",
+    "grDevices",
+    "utils",
+    "datasets",
+    "methods",
+    "base")
+  basic_packages <- paste("package:", basic_packages_blank, sep = "")
+  
+  package_list <- search()[
+    ifelse(unlist(gregexpr("package:", search())) == 1, TRUE, FALSE)]
+  
+  package_list <- setdiff(package_list, basic_packages)
+  
+  if (length(package_list) > 0)  for (package in package_list) {
+    detach(package, character.only = TRUE, unload = TRUE)
+    print(paste("package ", package, " detached", sep = ""))
+  }
+}
 
-```{r cars}
-summary(cars)
+detach_all_packages()
+
+# this allows multiple persons to use the same RMarkdown
+# without adjusting the working directory by themselves all the time
+source("scripts/csf.R")
+path_to_wd <- csf() # if this - for some reason - does not work, 
+# replace with a hardcoded path, like so: "~/projects/rddj-template/analysis/"
+if ( is.null(path_to_wd) | !dir.exists(path_to_wd)) {
+  print("WARNING: No working directory specified for current user")
+} else {
+  setwd(path_to_wd)
+}
 ```
 
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# from https://mran.revolutionanalytics.com/web/packages/checkpoint/vignettes/using-checkpoint-with-knitr.html
+# if you don't need a package, remove it from here (commenting is probably not sufficient)
+# tidyverse: see https://blog.rstudio.org/2016/09/15/tidyverse-1-0-0/
+cat("
+library(spatstat)
+library(data.table)
+library(rgdal)
+library(sf)
+library(magrittr)
+library(dplyr)
+library(rvest)
+library(polyCub)
+library(spatialkernel)
+library(lubridate)
+library(dismo)",
+file = "manifest.R")
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# if checkpoint is not yet installed, install it (for people using this
+# system for the first time)
+if (!require(checkpoint)) {
+  if (!require(devtools)) {
+    install.packages("devtools", repos = "http://cran.us.r-project.org")
+    require(devtools)
+  }
+  # devtools::install_github("checkpoint",
+  #   username = "RevolutionAnalytics",
+  #   ref = "v0.4.3", # could be adapted later,
+  #   # as of now (May 2018
+  #   # this is the current release on CRAN)
+  #   repos = "http://cran.us.r-project.org")
+  install.packages('checkpoint')
+  require(checkpoint)
+}
+# nolint start
+if (!dir.exists("~/.checkpoint")) {
+  dir.create("~/.checkpoint")
+}
+# nolint end
+# install packages for the specified CRAN snapshot date
+checkpoint(snapshotDate = package_date,
+  project = path_to_wd,
+  verbose = T,
+  scanForPackages = T,
+  use.knitr = F)
+rm(package_date)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+source("manifest.R")
+unlink("manifest.R")
+```

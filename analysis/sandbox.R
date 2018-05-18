@@ -10,8 +10,6 @@ library(spatialkernel)
 library(lubridate)
 library(dismo)
 
-# pacman::p_load(spatstat,data.table,rgdal,sf,magrittr,dplyr,rvest,polyCub,spatialkernel,lubridate)
-
 # Load data
 set <- list.files(path = '1-6m-accidents-traffic-flow-over-16-years',
                   pattern = 'accidents.*csv', full.names = TRUE)
