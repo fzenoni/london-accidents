@@ -10,7 +10,7 @@ library(spatialkernel)
 library(lubridate)
 library(dismo)
 
-pacman::p_load(spatstat,data.table,rgdal,sf,magrittr,dplyr,rvest,polyCub,spatialkernel,lubridate)
+# pacman::p_load(spatstat,data.table,rgdal,sf,magrittr,dplyr,rvest,polyCub,spatialkernel,lubridate)
 
 # Load data
 set <- list.files(path = '1-6m-accidents-traffic-flow-over-16-years',
@@ -25,8 +25,9 @@ data <- data[!duplicated(data)]
 data <- st_as_sf(data.frame(data), coords = c('Longitude', 'Latitude'), crs = 4326)
 
 # Load the Kaggle map
-map <- readOGR('1-6m-accidents-traffic-flow-over-16-years/Local_Authority_Districts_Dec_2016.geojson')
-map <- map %>% st_as_sf
+# map <- readOGR('1-6m-accidents-traffic-flow-over-16-years/Local_Authority_Districts_Dec_2016.geojson')
+# map <- map %>% st_as_sf
+map <- readRDS('data/map.Rds')
 
 # Harvest the list of London boroughs from Wikipedia
 wiki_london <- read_html('https://en.wikipedia.org/wiki/London_boroughs')
@@ -92,30 +93,27 @@ accident_densities <- density(london_splits)
 frac_severe_accidents <- accident_densities[[2]]/(accident_densities[[1]] + accident_densities[[2]])
 plot(frac_severe_accidents)
 
-bw_choice <- spseg(pts = london_ppp,
-                   #marks = marks(london_ppp)$severe,
-                   h = seq(300,500,20), opt = 1)
+# bw_choice <- spseg(pts = london_ppp,
+#                    #marks = marks(london_ppp)$severe,
+#                    h = seq(300,500,20), opt = 1)
+bw_choice <- readRDS('data/bw_choice.Rds')
 
 plotcv(bw_choice); abline(v = bw_choice$hcv, lty = 2, col = "red")
 
-seg100 <- spseg(
-  pts = london_ppp, 
-  h = bw_choice$hcv,
-  opt = 3,
-  ntest = 100, 
-  proc = FALSE)
-
+# seg100 <- spseg(
+#   pts = london_ppp, 
+#   h = bw_choice$hcv,
+#   opt = 3,
+#   ntest = 100, 
+#   proc = FALSE)
+seg100 <- readRDS('data/seg100.Rds')
 
 plotmc(seg100, 'Severe')
 
-
+# Extract tile from Google Maps and project it
 mybb <- st_bbox(st_transform(london_circle, crs=4326))
 projbb <- st_bbox(london_circle)
-tile <- get_map(as.vector(mybb), source = 'stamen', maptype = 'toner')
-# tile2 <- projectRaster(tile, crs = '+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +towgs84=446.448,-125.157,542.06,0.15,0.247,0.842,-20.489 +units=m +no_defs')
-
-
-#########
+# tile <- get_map(as.vector(mybb), source = 'stamen', maptype = 'toner')
 
 area <- extent(projbb['xmin'], projbb['xmax'], projbb['ymin'], projbb['ymax'])
 uk_proj4 <- '+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +towgs84=446.448,-125.157,542.06,0.15,0.247,0.842,-20.489 +units=m +no_defs'
@@ -127,60 +125,7 @@ proj4string(r) <- uk_proj4
 gm  <- gmap(x = r, type = "roadmap", scale = 1, zoom = 13, rgb = TRUE)
 gm2 <- projectRaster(gm, crs = uk_proj4)
 
-# Convert from ggmap to raster
-# https://github.com/Robinlovelace/Creating-maps-in-R/blob/master/vignettes/download-raster-osm.R
-# ggmap_rast = function(input_map) {
-#   map_bbox = attr(input_map, 'bb') 
-#   .extent = extent(as.numeric(map_bbox[c(2,4,1,3)]))
-#   my_map = raster(.extent, nrow= nrow(input_map), ncol = ncol(input_map))
-#   crs(my_map) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
-#   rgb_cols = setNames(as.data.frame(t(col2rgb(input_map))), c('red','green','blue'))
-#   red = my_map
-#   values(red) = rgb_cols[['red']]
-#   green = my_map
-#   values(green) = rgb_cols[['green']]
-#   blue = my_map
-#   values(blue) = rgb_cols[['blue']]
-#   # stack(red,green,blue)
-#   
-#   proj_map <- projectRaster(stack(red,green,blue), crs = uk_crs)
-#   proj_red <- proj_map
-#   values(proj_red) = rgb_cols[['red']]
-#   proj_green = proj_map
-#   values(proj_green) = rgb_cols[['green']]
-#   proj_blue = proj_map
-#   values(proj_blue) = rgb_cols[['blue']]
-#   stack(proj_red, proj_green, proj_blue)
-# }
-# 
-# test <- ggmap_rast(tile)
-# crs(test) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
-
-# Transform to 27700
-# test2 <- projectRaster(test, crs = '+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +towgs84=446.448,-125.157,542.06,0.15,0.247,0.842,-20.489 +units=m +no_defs')
-
-# 
-# ggmap_rast = function(map){
-#   map_bbox = attr(map, 'bb') 
-#   .extent = extent(as.numeric(map_bbox[c(2,4,1,3)]))
-#   my_map = raster(.extent, nrow= nrow(map), ncol = ncol(map))
-#   rgb_cols = setNames(as.data.frame(t(col2rgb(map))), c('red','green','blue'))
-#   red = my_map
-#   values(red) = rgb_cols[['red']]
-#   green = my_map
-#   values(green) = rgb_cols[['green']]
-#   blue = my_map
-#   values(blue) = rgb_cols[['blue']]
-#   stack(red,green,blue)
-# }
-# 
-# test <- ggmap_rast(tile)
-# crs(test) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
-
-
-##########
-
-# copy pasted from datacamp
+# Final picture copy-pasted from datacamp course
 ncol <- length(seg100$gridx)
 
 # Rearrange the probability column into a grid
