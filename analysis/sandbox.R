@@ -9,6 +9,7 @@ library(polyCub)
 library(spatialkernel)
 library(lubridate)
 library(dismo)
+library(geojsonsf)
 
 # Load data
 set <- list.files(path = '1-6m-accidents-traffic-flow-over-16-years',
@@ -23,9 +24,7 @@ data <- data[!duplicated(data)]
 data <- st_as_sf(data.frame(data), coords = c('Longitude', 'Latitude'), crs = 4326)
 
 # Load the Kaggle map
-# map <- readOGR('1-6m-accidents-traffic-flow-over-16-years/Local_Authority_Districts_Dec_2016.geojson')
-# map <- map %>% st_as_sf
-map <- readRDS('data/map.Rds')
+map <- geojson_sf('1-6m-accidents-traffic-flow-over-16-years/Local_Authority_Districts_Dec_2016.geojson')
 
 # Harvest the list of London boroughs from Wikipedia
 wiki_london <- read_html('https://en.wikipedia.org/wiki/London_boroughs')
@@ -37,8 +36,8 @@ list2 <- as.list(strsplit(boroughs2, "\n")) %>% unlist
 list <- c(list1, list2)
 
 # Special cases to fix
-list <- replace(list, list=='City of London (not a London borough)', 'City of London')
-list <- replace(list, list=='City of Westminster', 'Westminster')
+list <- list %>% replace(list=='City of London (not a London borough)', 'City of London')
+list <- list %>% replace(list=='City of Westminster', 'Westminster')
 
 # Filter map
 london <- map %>% filter(lad16nm %in% list)
@@ -91,13 +90,27 @@ accident_densities <- density(london_splits)
 frac_severe_accidents <- accident_densities[[2]]/(accident_densities[[1]] + accident_densities[[2]])
 plot(frac_severe_accidents)
 
+### TRY PARALLELISM
+no_cores <- detectCores() - 1
+cl <- makeCluster(no_cores, type = 'FORK')
+
+cv <- parLapply(cl, seq(300,500,20), function(h)
+  cvloglk(pts = as.matrix(coords(london_ppp)), h = h, marks = as.character(marks(london_ppp)))$cv
+)
+
 # bw_choice <- spseg(pts = london_ppp,
-#                    #marks = marks(london_ppp)$severe,
+#                     marks = marks(london_ppp),
 #                    h = seq(300,500,20), opt = 1)
-bw_choice <- readRDS('data/bw_choice.Rds')
+# bw_choice <- readRDS('data/bw_choice.Rds')
 
-plotcv(bw_choice); abline(v = bw_choice$hcv, lty = 2, col = "red")
+bw_choice <- data.frame(x = seq(300,500,20), y = unlist(cv))
 
+plot(bw_choice, type = 'l')
+max_loglk <- which.max(bw_choice[,2])
+abline(v = bw_choice[max_loglk, 1], lty = 2, col = "red")
+
+
+## TRY TO REPLACE THE FOLLOWING WITH phat and mcseg.test
 # seg100 <- spseg(
 #   pts = london_ppp, 
 #   h = bw_choice$hcv,

@@ -1,7 +1,7 @@
 ---
 title: London accidents and spatial analysis 
 author: Florian Zenoni
-date: '2018-05-18'
+date: '2018-05-22'
 categories:
   - R
   - Kaggle
@@ -27,12 +27,12 @@ The code for the herein described process can also be freely downloaded from [ht
 ```{r include=FALSE}
 detach_all_packages <- function() {
   basic_packages_blank <-  c("stats",
-    "graphics",
-    "grDevices",
-    "utils",
-    "datasets",
-    "methods",
-    "base")
+                             "graphics",
+                             "grDevices",
+                             "utils",
+                             "datasets",
+                             "methods",
+                             "base")
   basic_packages <- paste("package:", basic_packages_blank, sep = "")
   
   package_list <- search()[
@@ -74,8 +74,9 @@ library(dplyr)
 library(rvest)
 library(polyCub)
 library(spatialkernel)
-library(lubridate)
-library(dismo)",
+library(dismo)
+library(geojsonsf)
+library(mapview)",
 file = "manifest.R")
 ```
 
@@ -103,14 +104,173 @@ if (!dir.exists("~/.checkpoint")) {
 # nolint end
 # install packages for the specified CRAN snapshot date
 checkpoint(snapshotDate = package_date,
-  project = path_to_wd,
-  verbose = T,
-  scanForPackages = T,
-  use.knitr = F)
+           project = path_to_wd,
+           verbose = T,
+           scanForPackages = T,
+           use.knitr = F)
 rm(package_date)
 ```
 
 ```{r message=FALSE, warning=FALSE, include=FALSE}
 source("manifest.R")
 unlink("manifest.R")
+```
+
+### Baby, you can drive my car
+Besides being able to "put dots on a map", R can be used in very effective ways to do spatial analytics. Last month, Stefano already provided descriptive statistics on a Kaggle dataset that includes 16 years of UK accidents.
+
+It is now time to move up a gear (no pun intended), and tackle one of the many ways of extracting spatial insights from the data. In this post, we are going to ignore the potential analysis brought by the time series. It will certainly be the topic of another post.
+
+Instead we will try to propose an answer to the following questions: what if the government wanted to highlight the areas of a city showing some alarming characteristics, with a given statistical significance? What if we wanted to discover what are London's most dangerous roads or intersections for car drivers?
+
+In fact, London happens too large for our pruposes. I will only investigate a neighborhood, but the method shown in the following stays valid at any scale.
+
+
+### "80% of the data analyst job"
+
+First things first, we load the data and clean it a bit. The fastest way to do it in-memory, while enjoying the functions devoted to tables, is still to use the `data.table` package.
+
+```{r}
+# Load data
+set <- list.files(path = '1-6m-accidents-traffic-flow-over-16-years',
+                  pattern = 'accidents.*csv', full.names = TRUE)
+data <- lapply(set, fread) %>% rbindlist
+# Filter out empty locations
+data <- na.omit(data, cols = c('Longitude', 'Latitude'))
+# Remove duplicates
+data <- data[!duplicated(data)]
+```
+
+`data.table` is nice and all, but since we work with spatial data we're going to use the `sf` format, as we did in the past. As `sf` does not exactly extend `data.table` I'm going to cast the table to a `data.frame` first.
+
+```{r}
+data <- data %>% as.data.frame %>% st_as_sf(coords = c('Longitude', 'Latitude'), crs = 4326)
+```
+
+This data include accidents over 16 years for the whole of UK. It represents a lot of records, and performance wise, I don't necessarily have a strategy in place to analyze them all. As a first move, I'm going to select the events that fall inside the boroughs of London administrative boundaries. The Kaggle dataset luckily includes the geoJSON of UK's districts. I've had mixed feelings in the past concerning this format, but the bad ones were wiped out by the recent discovery of two methods to open and import it as `sf`.
+
+The first one is the classic `sf::read_sf()`.
+```{r}
+system.time(sf::read_sf('1-6m-accidents-traffic-flow-over-16-years/Local_Authority_Districts_Dec_2016.geojson'))
+```
+
+But the freshest discovery is the `geojsonsf::geojson_sf()` function from SymbolixAU (check their blog post post [here](https://www.symbolix.com.au/blog-main/2018-3)), that serves exactly our purpose, in an even faster way.
+
+```{r}
+system.time(map <- geojsonsf::geojson_sf('1-6m-accidents-traffic-flow-over-16-years/Local_Authority_Districts_Dec_2016.geojson'))
+head(map)
+```
+
+Now I would like to extract London's borough, but I am bored by having to inspect the map, and the need to learn new geography. Since I am the laziest member of the team, I decided to harvest [this Wikipedia page](https://en.wikipedia.org/wiki/London_boroughs) with the `rvest` package, and use the list to filter the regions of interest.
+
+```{r}
+# Harvest the list of London boroughs from Wikipedia
+wiki_london <- xml2::read_html('https://en.wikipedia.org/wiki/London_boroughs')
+boroughs1 <- wiki_london %>% rvest::html_nodes('ol') %>% .[[1]] %>% rvest::html_text()
+boroughs2 <- wiki_london %>% rvest::html_nodes('ol') %>% .[[2]] %>% rvest::html_text() 
+
+list1 <- as.list(strsplit(boroughs1, "\n")) %>% unlist
+list2 <- as.list(strsplit(boroughs2, "\n")) %>% unlist
+list <- c(list1, list2)
+
+# Special cases to fix
+list <- replace(list, list=='City of London (not a London borough)', 'City of London')
+list <- replace(list, list=='City of Westminster', 'Westminster')
+
+# Filter map
+london <- map %>% dplyr::filter(lad16nm %in% list)
+# Unite the boroughs
+london_union <- london %>% st_union
+```
+
+The London map is ready to be displayed.
+
+```{r}
+plot(london_union)
+```
+
+As mentioned before, originally I wanted to analyze all of London's data, but it seems that to do within today I would need to parallelize part of the analysis code (I have some plans, so maybe it will be a task for a post addendum). Instead, I will analyze the data falling into a radius of 2000 m from London's centroid. For `sf` aficionados, this is a trivial task.
+
+```{r}
+# Project to British National Grid (http://epsg.io/27700)
+data <- data %>% st_transform(crs = 27700)
+london_union <- london_union %>% st_transform(crs = 27700)
+
+# Build a circle
+center <- st_centroid(london_union)
+max_radius <- 2000
+london_circle <- st_buffer(center, max_radius)
+
+# Filter data thanks to map
+london_data <- data[london_circle,]
+```
+
+This is what we got. I know, I know, it's a small sample!
+
+```{r}
+# Original amount of data
+nrow(data)
+# Filtered data
+nrow(london_data)
+
+# Draw the area
+plot(london_union)
+sf.colors(alpha = 0.4)
+plot(london_circle, add = T, col = sf.colors(n = 1, alpha = 0.3))
+
+# Display the accidents as points
+mapview(london_data, map.types = "Esri.WorldImagery")
+```
+
+### Spatial data
+
+We're now ready to inspect some spatial data. I will split the accidents in two categories. This distinction is highly arbitrary: in order to be able to use the final results (i.e. where shoud Sadiq Khan spend taxpayer's money to increase security), more time should be spent in understanding the (meta-)data and in acquiring domain knowledge. But once again, even with a suboptimal decision at this stage, the following method stays valid.
+
+I decided to split the data into `Severe` and `Non-Severe` accidents, the former involving more than one casualty, the latter strictly one. To visualize and work on spatial densities, a special kind of object, `point pattern dataset`, coming from the `spatstat` package, will be used. The package is not (yet) able to deal with `sf`, so we're going to hold our noses and go back for a moment to `sp`.
+
+```{r}
+# Create spatstat ppp object piece by piece
+# Define window
+london_owin <- as(london_circle, 'Spatial') %>% as.owin.SpatialPolygons()
+# Extract accident coordinates
+london_coords <- st_coordinates(london_data)
+# Build "marks" or features
+london_marks <- as.factor(ifelse(london_data$Number_of_Casualties == 1, 'Non-Severe', 'Severe'))
+# Define ppp
+london_ppp <- ppp(x = london_coords[, 1], y = london_coords[, 2],
+                  window = london_owin,
+                  marks = london_marks)
+```
+
+With such an object, we can use `spatstat` to quickly display useful information. We start by showing the fraction of `Severe` accidents over the total.
+
+```{r}
+# Split the data according to the "marks"
+london_splits <- split(london_ppp)
+# Compute densities
+accident_densities <- density(london_splits)
+# Display fractional density
+frac_severe_accidents <- accident_densities[[2]]/(accident_densities[[1]] + accident_densities[[2]])
+plot(frac_severe_accidents)
+```
+
+This plot is cool, but it just tells us that the severe accidents are present in that area with a percentage that oscillates between approx. 8% and 11%. Are the highest concentrations meaningful? Are some areas actually more dangerous than others? Aren't they simply the result of random fluctuations?
+
+There is one way to find out. The technique I'm going to apply is called _spatial segregation_, in the context of point pattern analysis. I am going to display the density of accidents - split in two custom categories - thanks to kernel density. A smooth curve will be fitted on the data: highest values will correspond to the location of points, and these values will diminish as the distance from the point increases. However, a crucial parameter must first be determined: the bandwidth. Choose it too small, and the density will be at the maximum exactly where the points are, and zero elsewhere; choose it too large and the density will appear as a blob without any features.
+
+`spseg(opt = 1)` from the `spatialkernel` package will assist us in providing the best bandwidth value given our densities.
+This operation is intensive, and we're going to test some CPU parallelization.
+
+```{r, eval = FALSE}
+bw_choice <- spseg(pts = london_ppp,
+                   h = seq(300, 500, 20), opt = 1)
+```
+```{r, echo = FALSE}
+bw_choice <- readRDS('data/bw_choice.Rds')
+```
+
+The `h` parameter indicates the values to be tested by the algorithm that will maximize the cross-validate log-likelihood function of our bivariate Poisson point process (the details are left out). The right value is then provided as follows.
+
+```{r}
+plotcv(bw_choice); abline(v = bw_choice$hcv, lty = 2, col = "red")
 ```
