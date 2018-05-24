@@ -10,18 +10,22 @@ library(spatialkernel)
 library(lubridate)
 library(dismo)
 library(geojsonsf)
+library(parallel)
 
 # Load data
 set <- list.files(path = '1-6m-accidents-traffic-flow-over-16-years',
                   pattern = 'accidents.*csv', full.names = TRUE)
-data <- lapply(set, fread) %>% rbindlist
+
+cols_to_keep <- c('Location_Easting_OSGR', 'Location_Northing_OSGR', 'Number_of_Casualties')
+
+data <- lapply(set, fread, select = cols_to_keep) %>% rbindlist
 # Filter out empty locations
-data <- na.omit(data, cols = c('Longitude', 'Latitude'))
+data <- na.omit(data, cols = cols_to_keep)
 # Remove duplicates
 data <- data[!duplicated(data)]
 
 # Convert to sf
-data <- st_as_sf(data.frame(data), coords = c('Longitude', 'Latitude'), crs = 4326)
+data <- st_as_sf(data.frame(data), coords = c('Location_Easting_OSGR', 'Location_Northing_OSGR'), crs = 27700)
 
 # Load the Kaggle map
 map <- geojson_sf('1-6m-accidents-traffic-flow-over-16-years/Local_Authority_Districts_Dec_2016.geojson')
@@ -45,7 +49,7 @@ london <- map %>% filter(lad16nm %in% list)
 london_union <- london %>% st_union
 
 # Project
-data <- data %>% st_transform(crs = 27700)
+# data <- data %>% st_transform(crs = 27700)
 london_union <- london_union %>% st_transform(crs = 27700)
 
 # Build a outer circle
@@ -67,10 +71,14 @@ plot(london_circle, add = T)
 # Filter data thanks to map
 london_data <- data[london_circle,]
 
+# Reproject in lat-lon
+# london_data <- london_data %>% st_transform(4326)
+# london_circle <- london_circle %>% st_transform(4326)
+
 # Create spatstat ppp object piece by piece
 london_owin <- as(london_circle, 'Spatial') %>% as.owin.SpatialPolygons()
 london_coords <- st_coordinates(london_data)
-london_data <- london_data %>% mutate(Date = dmy(Date))
+# london_data <- london_data %>% mutate(Date = dmy(Date))
 # london_marks <- data.frame(date = london_data$Date,
 #                            year = as.factor(year(london_data$Date)),
 #                            month = as.factor(month(london_data$Date, label = TRUE)),
@@ -94,7 +102,8 @@ plot(frac_severe_accidents)
 no_cores <- detectCores() - 1
 cl <- makeCluster(no_cores, type = 'FORK')
 
-cv <- parLapply(cl, seq(300,500,20), function(h)
+h <- seq(300,500,1)
+cv <- parLapply(cl, h, function(h)
   cvloglk(pts = as.matrix(coords(london_ppp)), h = h, marks = as.character(marks(london_ppp)))$cv
 )
 
@@ -103,38 +112,51 @@ cv <- parLapply(cl, seq(300,500,20), function(h)
 #                    h = seq(300,500,20), opt = 1)
 # bw_choice <- readRDS('data/bw_choice.Rds')
 
-bw_choice <- data.frame(x = seq(300,500,20), y = unlist(cv))
+stopCluster(cl)
 
+bw_choice <- data.frame(x = h, y = unlist(cv))
 plot(bw_choice, type = 'l')
 max_loglk <- which.max(bw_choice[,2])
 abline(v = bw_choice[max_loglk, 1], lty = 2, col = "red")
 
-
-## TRY TO REPLACE THE FOLLOWING WITH phat and mcseg.test
-# seg100 <- spseg(
-#   pts = london_ppp, 
-#   h = bw_choice$hcv,
+## TOO LONG: TRY TO PARALLELIZE
+# mc <- rep(1, 10)
+# 
+# jobs <- lapply(mc, function(x) mcparallel(spseg(
+#   pts = london_ppp,
+#   h = bw_choice[max_loglk, 1],
 #   opt = 3,
-#   ntest = 100, 
-#   proc = FALSE)
-seg100 <- readRDS('data/seg100.Rds')
+#   ntest = x,
+#   proc = FALSE)))
+# 
+# res <- mccollect(jobs)
+
+seg100 <- spseg(
+  pts = london_ppp,
+  h = bw_choice[max_loglk, 1],
+  opt = 3,
+  ntest = 100,
+  proc = FALSE)
+
+saveRDS(seg100, 'data/seg100.Rds')
+# seg100 <- readRDS('data/seg100.Rds')
 
 plotmc(seg100, 'Severe')
 
 # Extract tile from Google Maps and project it
 mybb <- st_bbox(st_transform(london_circle, crs=4326))
-projbb <- st_bbox(london_circle)
+# projbb <- st_bbox(london_circle)
 # tile <- get_map(as.vector(mybb), source = 'stamen', maptype = 'toner')
 
-area <- extent(projbb['xmin'], projbb['xmax'], projbb['ymin'], projbb['ymax'])
+area <- extent(mybb['xmin'], mybb['xmax'], mybb['ymin'], mybb['ymax'])
 uk_proj4 <- '+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +towgs84=446.448,-125.157,542.06,0.15,0.247,0.842,-20.489 +units=m +no_defs'
 
 r <- raster()
 extent(r) <- area
-proj4string(r) <- uk_proj4
+# proj4string(r) <- uk_proj4
 
-gm  <- gmap(x = r, type = "roadmap", scale = 1, zoom = 13, rgb = TRUE)
-gm2 <- projectRaster(gm, crs = uk_proj4)
+gm  <- gmap(x = r, type = "roadmap", scale = 1, zoom = 14, rgb = TRUE)
+gm2 <- projectRaster(gm, crs = uk_proj4, method = 'ngb')
 
 # Final picture copy-pasted from datacamp course
 ncol <- length(seg100$gridx)
@@ -177,4 +199,4 @@ segmap <- function(prob_list, pv_list, low, high){
 }
 
 # Map the probability and p-value
-segmap(prob_severe, p_value, 0.075, 0.10)
+segmap(prob_severe, p_value, 0.12, 0.16)
