@@ -39,5 +39,4 @@ rsconnect/
 # Data used for the project
 1-6m-accidents-traffic-flow-over-16-years.zip
 1-6m-accidents-traffic-flow-over-16-years/
-data/
 .Rproj.user

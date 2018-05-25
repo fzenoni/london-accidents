@@ -74,9 +74,10 @@ library(dplyr)
 library(rvest)
 library(polyCub)
 library(spatialkernel)
-library(dismo)
 library(geojsonsf)
-library(mapview)",
+library(mapview)
+library(parallel)
+library(dismo)",
 file = "manifest.R")
 ```
 
@@ -123,33 +124,35 @@ It is now time to move up a gear (no pun intended), and tackle one of the many w
 
 Instead we will try to propose an answer to the following questions: what if the government wanted to highlight the areas of a city showing some alarming characteristics, with a given statistical significance? What if we wanted to discover what are London's most dangerous roads or intersections for car drivers?
 
-In fact, London happens too large for our pruposes. I will only investigate a neighborhood, but the method shown in the following stays valid at any scale.
-
+In fact, London happens too large for our pruposes. I will investigate the area enclosed by a radius of 4 km, but the method shown in the following stays valid at any scale.
 
 ### "80% of the data analyst job"
 
-First things first, we load the data and clean it a bit. The fastest way to do it in-memory, while enjoying the functions devoted to tables, is still to use the `data.table` package.
+First things first, we load the data and clean it a bit. The fastest way to do it in-memory, while enjoying the functions devoted to tables, is still to use the `data.table` package, together with the selection of the strict minimum amount of columns.
 
 ```{r}
 # Load data
 set <- list.files(path = '1-6m-accidents-traffic-flow-over-16-years',
                   pattern = 'accidents.*csv', full.names = TRUE)
-data <- lapply(set, fread) %>% rbindlist
+cols_to_keep <- c('Location_Easting_OSGR', 'Location_Northing_OSGR', 'Number_of_Casualties')
+data <- lapply(set, fread, select = cols_to_keep) %>% rbindlist
 # Filter out empty locations
-data <- na.omit(data, cols = c('Longitude', 'Latitude'))
+data <- na.omit(data, cols = cols_to_keep)
 # Remove duplicates
 data <- data[!duplicated(data)]
 ```
 
-`data.table` is nice and all, but since we work with spatial data we're going to use the `sf` format, as we did in the past. As `sf` does not exactly extend `data.table` I'm going to cast the table to a `data.frame` first.
+`data.table` is nice and all, but since we work with spatial data we're going to use the `sf` format, as we did in the past. As `sf` does not exactly extend `data.table`, I'm going to cast the table to a `data.frame` first. Note the CRS, corresponding to the British [Ordnance Survey National Grid](https://en.wikipedia.org/wiki/Ordnance_Survey_National_Grid).
 
 ```{r}
-data <- data %>% as.data.frame %>% st_as_sf(coords = c('Longitude', 'Latitude'), crs = 4326)
+data <- st_as_sf(data.frame(data), coords = c('Location_Easting_OSGR', 'Location_Northing_OSGR'), crs = 27700)
 ```
 
-This data include accidents over 16 years for the whole of UK. It represents a lot of records, and performance wise, I don't necessarily have a strategy in place to analyze them all. As a first move, I'm going to select the events that fall inside the boroughs of London administrative boundaries. The Kaggle dataset luckily includes the geoJSON of UK's districts. I've had mixed feelings in the past concerning this format, but the bad ones were wiped out by the recent discovery of two methods to open and import it as `sf`.
+This data include accidents over 16 years for the whole of UK. It represents a lot of records, and performance wise, I don't necessarily have a strategy in place to analyze them all. As a first move, I'm going to select the events that fall inside the boroughs of London administrative boundaries. The Kaggle dataset luckily includes the geoJSON of UK's districts.
 
-The first one is the classic `sf::read_sf()`.
+Until very recently, I've had mixed feelings in the past concerning this format. I changed my mind thanks to the discovery of two methods to open and import it as `sf`.
+
+The first one is the now classic `sf::read_sf()`.
 ```{r}
 system.time(sf::read_sf('1-6m-accidents-traffic-flow-over-16-years/Local_Authority_Districts_Dec_2016.geojson'))
 ```
@@ -158,16 +161,21 @@ But the freshest discovery is the `geojsonsf::geojson_sf()` function from Symbol
 
 ```{r}
 system.time(map <- geojsonsf::geojson_sf('1-6m-accidents-traffic-flow-over-16-years/Local_Authority_Districts_Dec_2016.geojson'))
+```
+
+Let's quickly inspect the `map` object.
+
+```{r}
 head(map)
 ```
 
-Now I would like to extract London's borough, but I am bored by having to inspect the map, and the need to learn new geography. Since I am the laziest member of the team, I decided to harvest [this Wikipedia page](https://en.wikipedia.org/wiki/London_boroughs) with the `rvest` package, and use the list to filter the regions of interest.
+Now I would like to extract data relevant to London's boroughs, but I am bored by having to inspect the map, and the need to learn new geography. I am the laziest member of the team, and as such I refuse to copy-paste 31 names into a list. Therefore, I decided to harvest [this Wikipedia page](https://en.wikipedia.org/wiki/London_boroughs) with the `rvest` package, and use the list to filter the regions of interest.
 
 ```{r}
 # Harvest the list of London boroughs from Wikipedia
 wiki_london <- xml2::read_html('https://en.wikipedia.org/wiki/London_boroughs')
 boroughs1 <- wiki_london %>% rvest::html_nodes('ol') %>% .[[1]] %>% rvest::html_text()
-boroughs2 <- wiki_london %>% rvest::html_nodes('ol') %>% .[[2]] %>% rvest::html_text() 
+boroughs2 <- wiki_london %>% rvest::html_nodes('ol') %>% .[[2]] %>% rvest::html_text()
 
 list1 <- as.list(strsplit(boroughs1, "\n")) %>% unlist
 list2 <- as.list(strsplit(boroughs2, "\n")) %>% unlist
@@ -180,7 +188,7 @@ list <- replace(list, list=='City of Westminster', 'Westminster')
 # Filter map
 london <- map %>% dplyr::filter(lad16nm %in% list)
 # Unite the boroughs
-london_union <- london %>% st_union
+london_union <- london %>% sf::st_union()
 ```
 
 The London map is ready to be displayed.
@@ -189,7 +197,7 @@ The London map is ready to be displayed.
 plot(london_union)
 ```
 
-As mentioned before, originally I wanted to analyze all of London's data, but it seems that to do within today I would need to parallelize part of the analysis code (I have some plans, so maybe it will be a task for a post addendum). Instead, I will analyze the data falling into a radius of 2000 m from London's centroid. For `sf` aficionados, this is a trivial task.
+As mentioned before, originally I wanted to analyze all of London's data (if not all of UK), but it seems that to do within today I would need to parallelize a larger part of the analysis code (I have some plans, so maybe it will be a task for a post addendum). Instead, I will analyze the data falling into a radius of 4000 m from London's centroid. For `sf` aficionados, this is a trivial task.
 
 ```{r}
 # Project to British National Grid (http://epsg.io/27700)
@@ -198,7 +206,7 @@ london_union <- london_union %>% st_transform(crs = 27700)
 
 # Build a circle
 center <- st_centroid(london_union)
-max_radius <- 2000
+max_radius <- 4000
 london_circle <- st_buffer(center, max_radius)
 
 # Filter data thanks to map
@@ -215,7 +223,6 @@ nrow(london_data)
 
 # Draw the area
 plot(london_union)
-sf.colors(alpha = 0.4)
 plot(london_circle, add = T, col = sf.colors(n = 1, alpha = 0.3))
 
 # Display the accidents as points
@@ -224,20 +231,20 @@ mapview(london_data, map.types = "Esri.WorldImagery")
 
 ### Spatial data
 
-We're now ready to inspect some spatial data. I will split the accidents in two categories. This distinction is highly arbitrary: in order to be able to use the final results (i.e. where shoud Sadiq Khan spend taxpayer's money to increase security), more time should be spent in understanding the (meta-)data and in acquiring domain knowledge. But once again, even with a suboptimal decision at this stage, the following method stays valid.
+We're now ready to inspect some spatial data. I will split the accidents in two categories. This distinction is highly arbitrary: in order to be able to use the final results (i.e. where shoud Sadiq Khan spend taxpayer's money to increase security), more understanding of the (meta-)data is needed. But once again, even with a suboptimal decision at this stage, the method stays valid.
 
 I decided to split the data into `Severe` and `Non-Severe` accidents, the former involving more than one casualty, the latter strictly one. To visualize and work on spatial densities, a special kind of object, `point pattern dataset`, coming from the `spatstat` package, will be used. The package is not (yet) able to deal with `sf`, so we're going to hold our noses and go back for a moment to `sp`.
 
-```{r}
+```{r, warning=FALSE}
 # Create spatstat ppp object piece by piece
 # Define window
-london_owin <- as(london_circle, 'Spatial') %>% as.owin.SpatialPolygons()
+london_owin <- sf::as_Spatial(london_circle) %>% polyCub::as.owin.SpatialPolygons()
 # Extract accident coordinates
-london_coords <- st_coordinates(london_data)
+london_coords <- sf::st_coordinates(london_data)
 # Build "marks" or features
 london_marks <- as.factor(ifelse(london_data$Number_of_Casualties == 1, 'Non-Severe', 'Severe'))
 # Define ppp
-london_ppp <- ppp(x = london_coords[, 1], y = london_coords[, 2],
+london_ppp <- spatstat::ppp(x = london_coords[, 1], y = london_coords[, 2],
                   window = london_owin,
                   marks = london_marks)
 ```
@@ -248,29 +255,143 @@ With such an object, we can use `spatstat` to quickly display useful information
 # Split the data according to the "marks"
 london_splits <- split(london_ppp)
 # Compute densities
-accident_densities <- density(london_splits)
+accident_densities <- stats::density(london_splits)
 # Display fractional density
 frac_severe_accidents <- accident_densities[[2]]/(accident_densities[[1]] + accident_densities[[2]])
 plot(frac_severe_accidents)
 ```
 
-This plot is cool, but it just tells us that the severe accidents are present in that area with a percentage that oscillates between approx. 8% and 11%. Are the highest concentrations meaningful? Are some areas actually more dangerous than others? Aren't they simply the result of random fluctuations?
+This plot is cool, but it just tells us that the severe accidents are present in that area with a percentage that oscillates between approx. 13% and 19%. Are the highest concentrations meaningful? Are some areas actually more dangerous than others? Aren't they simply the result of random fluctuations?
 
 There is one way to find out. The technique I'm going to apply is called _spatial segregation_, in the context of point pattern analysis. I am going to display the density of accidents - split in two custom categories - thanks to kernel density. A smooth curve will be fitted on the data: highest values will correspond to the location of points, and these values will diminish as the distance from the point increases. However, a crucial parameter must first be determined: the bandwidth. Choose it too small, and the density will be at the maximum exactly where the points are, and zero elsewhere; choose it too large and the density will appear as a blob without any features.
 
 `spseg(opt = 1)` from the `spatialkernel` package will assist us in providing the best bandwidth value given our densities.
-This operation is intensive, and we're going to test some CPU parallelization.
-
-```{r, eval = FALSE}
-bw_choice <- spseg(pts = london_ppp,
-                   h = seq(300, 500, 20), opt = 1)
-```
-```{r, echo = FALSE}
-bw_choice <- readRDS('data/bw_choice.Rds')
-```
-
-The `h` parameter indicates the values to be tested by the algorithm that will maximize the cross-validate log-likelihood function of our bivariate Poisson point process (the details are left out). The right value is then provided as follows.
+The execution of the workforce function, `spatialkernel::cvloglk`, is resource intensive, and we're going to use parallel computation (as long as you're on Mac or Linux). I leave out the details, but you can check this [blog post](http://gforge.se/2015/02/how-to-go-parallel-in-r-basics-tips/) for more information.
 
 ```{r}
-plotcv(bw_choice); abline(v = bw_choice$hcv, lty = 2, col = "red")
+h <- seq(500,550,5)
+
+os <- Sys.info()['sysname']
+
+if(os == 'Windows') {
+  bw_choice <- spatialkernel::spseg(pts = london_ppp,
+                     h = h, opt = 1)
+  
+  spatialkernel::plotcv(bw_choice); abline(v = bw_choice$hcv, lty = 2, col = "red")
+  
+} else if(os == 'Linux' | os == 'Darwin') {
+  
+  no_cores <- max(1, parallel::detectCores() - 1)
+  cl <- parallel::makeCluster(no_cores, type = 'FORK')
+  cv <- parallel::parLapply(cl, h, function(h)
+    cvloglk(pts = as.matrix(spatstat::coords(london_ppp)),
+            h = h,
+            marks = as.character(spatstat::marks(london_ppp)))$cv
+  )
+  
+  parallel::stopCluster(cl)
+  
+  bw_choice <- data.frame(x = h, y = unlist(cv))
+  plot(bw_choice, type = 'l')
+  max_loglk <- which.max(bw_choice[,2])
+  abline(v = bw_choice[max_loglk, 1], lty = 2, col = "red")
+} else {
+  stop('OS not supported.')
+}
 ```
+
+This plot indicates the value maximizing the cross-validate log-likelihood function of the bivariate Poisson point process, which describes our point distribution. This value will be carried over in the next step.
+
+How can we assess if a higher concentration of `Severe` accidents is statistically significant. A classic way to proceed is:
+1. to generate a large number of Monte-Carlo simulations that randomly change the location of the accidents,
+2. to compute some test statistic for every one of them,
+3. and then to check how our data's test statistic compare to the simulated ones.
+This is done for all pixels on a grid covering our region of interest. The following step generates 1000 MC and took hours to compute. Its output has already been loaded for you behind the scenes.
+
+```{r, eval=FALSE}
+seg1000 <- spseg(
+  pts = london_ppp,
+  h = bw_choice[max_loglk, 1],
+  opt = 3,
+  ntest = 1000,
+  proc = FALSE)
+```
+```{r, echo=FALSE}
+seg1000 <- readRDS('data/seg1000.Rds')
+```
+
+```{r}
+spatialkernel::plotmc(seg1000, 'Severe')
+```
+
+This plot shows two levels of the p-values of the `Severe` accidents locations in our data: one for p-value equal to 0.05, and the other equal to 0.95. This p-value represents the statistical significance with which we reject (or not) the null hypothesis of a random distribution of `Severe` vs `Non-Severe` accidents. The lower is the p-value, the stricter is our rejection test. In other words, the areas with a p-value below 0.05 show a concentration of `Severe` accidents that doesn't seem to be fortuitous.
+
+### Downloading the raster
+For a decision maker, the plot above is not informative at all, because we don't get to see to which zones the risky areas correspond. We can of course solve this by downloading a raster of the area of interest.
+
+```{r}
+# The download needs lat-lon parameters
+mybb <- sf::st_bbox(sf::st_transform(london_circle, crs=4326))
+area <- extent(mybb['xmin'], mybb['xmax'], mybb['ymin'], mybb['ymax'])
+r <- raster()
+extent(r) <- area
+
+# Download from Google Maps
+gm  <- dismo::gmap(x = r, type = "roadmap", scale = 1, zoom = 13, rgb = TRUE)
+
+# We project the raster back to crs = 27700
+uk_proj4 <- '+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +towgs84=446.448,-125.157,542.06,0.15,0.247,0.842,-20.489 +units=m +no_defs'
+# method = 'ngb' is necessary to preserve the RGB colors
+gm2 <- projectRaster(gm, crs = uk_proj4, method = 'ngb')
+```
+
+### Final step
+
+As a final step we generate the complete picture. We choose a p-value threshold of < 0.01, meaning that we have one in a hundred chance of being wrong.
+
+```{r}
+# Rearrange the probability column into a grid
+ncol <- length(seg1000$gridx)
+prob_severe <- list(x = seg1000$gridx,
+                    y = seg1000$gridy,
+                    z = matrix(seg1000$p[, "Severe"],
+                               ncol = ncol))
+
+
+# Rearrange the p-values, but choose a p-value threshold
+p_value <- list(x = seg1000$gridx,
+                y = seg1000$gridy,
+                z = matrix(seg1000$stpvalue[, "Severe"] < 0.01,
+                           ncol = ncol))
+# Create a mapping function
+segmap <- function(prob_list, pv_list, low, high){
+  
+  # background map
+  # plotRGB(test2)
+  plotRGB(gm2)
+  
+  
+  # p-value areas
+  image(pv_list, 
+        col = c("#00000000", "#FF808080"), add = T) 
+  
+  # probability contours
+  contour(prob_list,
+          levels = c(low, high),
+          col = c("#206020", "red"),
+          labels = c("Low", "High"),
+          add = TRUE)
+  
+  # boundary window
+  plot(Window(london_ppp), add = TRUE)
+}
+
+# Map the probability and p-value
+segmap(prob_severe, p_value, 0.13, 0.17)
+```
+
+The chosen probability values (0.13 and 0.17) are completely custom and depend on the fraction of event carried by the data. If you analyze a different area, these numbers will certainly be different if you want to keep a good visual effect.
+
+### Acknowledgments
+
+I couldn't have written this post if it weren't for the kind help of Dr. Barry Rowlingson (follow him [on Twitter](https://twitter.com/geospacedman)). His [Datacamp course](https://www.datacamp.com/courses/spatial-statistics-in-r) was an invaluable resource to perform the spatial analysis.

@@ -7,7 +7,6 @@ library(dplyr)
 library(rvest)
 library(polyCub)
 library(spatialkernel)
-library(lubridate)
 library(dismo)
 library(geojsonsf)
 library(parallel)
@@ -55,7 +54,7 @@ london_union <- london_union %>% st_transform(crs = 27700)
 # Build a outer circle
 # radii <- st_distance(st_centroid(london_union), st_cast(st_boundary(london_union), 'POINT')) %>% .[1,]
 # max_radius <- max(radii)
-max_radius <- 2000
+max_radius <- 4000
 # offset <- st_sfc(st_point(x = c(0, 4000)), crs = 27700)
 # center <- st_centroid(london_union) - offset
 # st_crs(center) <- 27700
@@ -102,7 +101,7 @@ plot(frac_severe_accidents)
 no_cores <- detectCores() - 1
 cl <- makeCluster(no_cores, type = 'FORK')
 
-h <- seq(300,500,1)
+h <- seq(500,550,5)
 cv <- parLapply(cl, h, function(h)
   cvloglk(pts = as.matrix(coords(london_ppp)), h = h, marks = as.character(marks(london_ppp)))$cv
 )
@@ -131,17 +130,17 @@ abline(v = bw_choice[max_loglk, 1], lty = 2, col = "red")
 # 
 # res <- mccollect(jobs)
 
-seg100 <- spseg(
+seg1000 <- spseg(
   pts = london_ppp,
   h = bw_choice[max_loglk, 1],
   opt = 3,
-  ntest = 100,
+  ntest = 1000,
   proc = FALSE)
 
-saveRDS(seg100, 'data/seg100.Rds')
+saveRDS(seg1000, 'data/seg1000.Rds')
 # seg100 <- readRDS('data/seg100.Rds')
 
-plotmc(seg100, 'Severe')
+plotmc(seg1000, 'Severe')
 
 # Extract tile from Google Maps and project it
 mybb <- st_bbox(st_transform(london_circle, crs=4326))
@@ -155,23 +154,23 @@ r <- raster()
 extent(r) <- area
 # proj4string(r) <- uk_proj4
 
-gm  <- gmap(x = r, type = "roadmap", scale = 1, zoom = 14, rgb = TRUE)
+gm  <- gmap(x = r, type = "roadmap", scale = 1, zoom = 13, rgb = TRUE)
 gm2 <- projectRaster(gm, crs = uk_proj4, method = 'ngb')
 
 # Final picture copy-pasted from datacamp course
-ncol <- length(seg100$gridx)
+ncol <- length(seg1000$gridx)
 
 # Rearrange the probability column into a grid
-prob_severe <- list(x = seg100$gridx,
-                    y = seg100$gridy,
-                    z = matrix(seg100$p[, "Severe"],
+prob_severe <- list(x = seg1000$gridx,
+                    y = seg1000$gridy,
+                    z = matrix(seg1000$p[, "Severe"],
                                ncol = ncol))
 image(prob_severe)
 
 # Rearrange the p-values, but choose a p-value threshold
-p_value <- list(x = seg100$gridx,
-                y = seg100$gridy,
-                z = matrix(seg100$stpvalue[, "Severe"] < 0.05,
+p_value <- list(x = seg1000$gridx,
+                y = seg1000$gridy,
+                z = matrix(seg1000$stpvalue[, "Severe"] < 0.01,
                            ncol = ncol))
 image(p_value)
 
@@ -199,4 +198,4 @@ segmap <- function(prob_list, pv_list, low, high){
 }
 
 # Map the probability and p-value
-segmap(prob_severe, p_value, 0.12, 0.16)
+segmap(prob_severe, p_value, 0.13, 0.17)
