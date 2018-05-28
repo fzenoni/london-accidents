@@ -40,3 +40,4 @@ rsconnect/
 1-6m-accidents-traffic-flow-over-16-years.zip
 1-6m-accidents-traffic-flow-over-16-years/
 .Rproj.user
+*.html
