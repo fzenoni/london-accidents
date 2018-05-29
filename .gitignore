@@ -37,7 +37,9 @@ vignettes/*.pdf
 rsconnect/
 
 # Data used for the project
-1-6m-accidents-traffic-flow-over-16-years.zip
-1-6m-accidents-traffic-flow-over-16-years/
+analysis/1-6m-accidents-traffic-flow-over-16-years.zip
+analysis/1-6m-accidents-traffic-flow-over-16-years/
+analysis/london-accidents-data/*.csv
+analysis/london-accidents-data/*.geojson
 .Rproj.user
 *.html
