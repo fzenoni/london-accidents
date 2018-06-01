@@ -1,17 +1,19 @@
 ---
 title: London accidents and spatial analysis 
 author: Florian Zenoni
-date: '2018-05-22'
+date: '2018-05-31'
 categories:
   - R
   - Kaggle
   - Spatial analysis
 tags:
-  - sf
+  - R
+  - Kaggle
+  - Spatial analysis
 slug: analyzing-london-accidents
 ---
 
-```{r, echo=FALSE}
+```{r echo=FALSE}
 # CONFIG
 user_name <- "fzenoni" # your Git username (only needed if
 # you want to deploy to GH pages)
@@ -75,7 +77,7 @@ library(rvest)
 library(polyCub)
 library(spatialkernel)
 library(geojsonsf)
-library(mapview)
+library(leaflet)
 library(parallel)
 library(dismo)",
 file = "manifest.R")
@@ -227,7 +229,8 @@ plot(london_union)
 plot(london_circle, add = T, col = sf.colors(n = 1, alpha = 0.3))
 
 # Display the accidents as points
-mapview(london_data, map.types = "Esri.WorldImagery")
+leaflet(st_transform(london_data, crs = 4326), width = '100%') %>% addProviderTiles('Stamen.Toner') %>% 
+  addMarkers(clusterOptions = markerClusterOptions())
 ```
 
 ## Spatial analysis
@@ -236,7 +239,7 @@ We're now ready to inspect some spatial data. I will split the accidents in two 
 
 I decided to split the data into `Severe` and `Non-Severe` accidents, the former involving more than one casualty, the latter strictly one. Then, to visualize and work on spatial densities, a special kind of object, `point pattern dataset`, coming from the [`spatstat`](https://cran.r-project.org/package=spatstat) package, will be used. The package is not (yet) able to deal with `sf`, so we're going to hold our noses and go back for a moment to [`sp`](https://cran.r-project.org/package=sp).
 
-```{r, warning=FALSE}
+```{r warning=FALSE}
 # Create spatstat ppp object piece by piece
 # Define window
 london_owin <- sf::as_Spatial(london_circle) %>% polyCub::as.owin.SpatialPolygons()
@@ -309,7 +312,7 @@ Now, how can we assess if a higher concentration of `Severe` accidents is statis
 3. and then to check how the _data_ test statistic compare to the simulated ones.
 The test statistic is actually computed for all pixels on a grid covering our region of interest. The following step generates 1000 MC: it took hours to compute, so its output has been loaded for you behind the scenes.
 
-```{r, eval=FALSE}
+```{r eval=FALSE}
 seg1000 <- spseg(
   pts = london_ppp,
   h = bw_choice[max_loglk, 1],
